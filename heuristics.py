@@ -6,14 +6,22 @@ import re
 # Expand/curate this list with your moderators.
 # Include Arabic and Arabizi variants.
 LEXEMES = [
-    r"\b(dreb|darb|drebhoum|dreb-hom|darbhum|drebkom)\b",
-    r"\b(nqtel|n9tel|nqtlo|n9tlo|nqtlhom|n9tlhom|n9telkom)\b",
-    r"\b(7rq|hrq|7rqou|7erqou|hreqhom)\b",
-    r"\b(ksro|kassrou|ksr|ksrouhum|kassr)\b",
-    r"\b(t3awno.*tderbo|taawnou.*tdrbo)\b",
-    r"\b(hit|kill|attack|beat|smash)\b",
-    r"\b(weapons?|swords?|knives?|molotov)\b",
-    r"نقتل|نحرق|إحرق|دير العنف|اضربهم|كسروهم|سلاح|سكين|مطواة|قنبلة",
+    # Arabizi & English stems (violence verbs / weapons)
+    r"\b[nty]?(dreb|darb)\w*",                       # dreb, ndrebouhom, tderbo...
+    r"\b(n9?tel|nqtel|n9tlo|nqtlo|nqtl)\w*",         # n9tlhom, nqtlkom...
+    r"\b(7rq|hrq|7erq|hreq)\w*",                     # 7rqou, hreqhom...
+    r"\b(ksr|kassr|ksro|ksrou)\w*",                  # ksrouhum...
+    r"\b(t3awno\w*\s+td?erb\w*)",                    # t3awno ... tderbo
+    r"\b(hajm|hajmo|hajmou|hajmo(h|)om|hajmou(h|)om)\w*",  # hajmohom, hajmouhom (attack)
+    r"\b(syof|syouf|sayf|seif|sif|sword|swords)\b",  # Arabizi/English 'sword(s)'
+    r"\b(hit|kill|attack|smash|burn|molotov)\b",
+    r"\b(weapon|weapons|knife|knives|gun|guns|bottle)\b",
+
+    # Arabic verbs/nouns (violence/incitement)
+    r"نقتل|نحرق|إ?حرق|اضرب(?:و?هم)?|كسرو(?:هم)?|دير(?:\s)?العنف",
+    r"هاجم(?:و?هم)?|هجم(?:و?هم)?",                  # attack them
+    r"سيف|سيوف|سلِّ?حوا|تسلَّ?حوا",                 # swords / get armed
+    r"سكين|سكاكين|مطواة|خنجر|هراوة|عصي|حجر|حجارة|قنبلة|مولوتوف",
 ]
 
 PATTERNS = [re.compile(p, re.IGNORECASE) for p in LEXEMES]

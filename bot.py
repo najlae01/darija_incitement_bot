@@ -7,7 +7,7 @@ from discord.ext import commands
 from dotenv import load_dotenv
 
 from translit import arabizi_to_arabic, normalize
-from moderation import openai_moderate
+from moderation import openai_moderate, tierb_inference
 from heuristics import incitement_bonus
 
 load_dotenv()
@@ -54,18 +54,38 @@ async def get_context_snippets(message: discord.Message, n: int):
         pass
     return list(reversed(snippets))
 
-def score_message(text: str, context_text: str = "") -> float:
-    # Tier A: moderation API
-    mod = openai_moderate(text + ("\n\nCONTEXT:\n" + context_text if context_text else ""))
+def score_message(text_arabic: str, context_text: str = "", text_raw_norm: str = "") -> tuple[float, dict]:
+    """
+    - text_arabic: transliterated/Arabic-normalized string (we send this to Tier A/B)
+    - text_raw_norm: the normalized raw message (Latin/Arabizi as typed)
+    """
+    # Tier A (OpenAI moderation) on Arabic-normalized text + context
+    mod = openai_moderate(text_arabic + ("\n\nCONTEXT:\n" + context_text if context_text else ""))
     score = float(mod.get("violence_score", 0.0))
-    # Heuristic bonus for explicit incitement lexemes
-    score += incitement_bonus(text)
+
+    # Tier B (optional custom endpoint)
+    b = tierb_inference(text_arabic, context_text)
+    if b and isinstance(b.get("incitement_score"), (int, float)):
+        score = max(score, float(b["incitement_score"]))
+        cats = mod.get("categories", {})
+        cats["tier_b_used"] = True
+        mod["categories"] = cats
+
+    # Heuristic bonus on BOTH forms
+    bonus_a = incitement_bonus(text_arabic)
+    bonus_r = incitement_bonus(text_raw_norm or "")
+    score += max(bonus_a, bonus_r)
+
     return min(score, 1.0), mod
 
 async def warn_user(user: discord.Member, reason: str, message_link: str):
     try:
-        await user.send(f"⚠️ **Warning**: Your recent message may violate server rules (incitement to violence).\n"
-                        f"Please keep it peaceful. Reference: {message_link}")
+        await user.send(
+            f"⚠️ **Warning / تحذير**: Paimon doesn't like this.\n"
+            f"Please keep it peaceful and don’t incite violence or war.\n"
+            f"من فضلك خليك مسالم، وما تحرضش على العنف ولا الحرب.\n"
+            f"Reference / المرجع: {message_link}"
+        )
     except Exception:
         pass  # user may have DMs closed
 
@@ -77,18 +97,55 @@ async def temp_mute(member: discord.Member, seconds: int, reason: str):
         logging.warning(f"Failed to timeout member: {e}")
 
 async def escalate_to_mods(message: discord.Message, score: float, details: dict):
-    ch = message.guild.get_channel(MOD_QUEUE_CHANNEL_ID) if message.guild else None
+    guild = message.guild
+    ch = guild.get_channel(MOD_QUEUE_CHANNEL_ID) if guild else None
     content_preview = (message.content[:800] + ("…" if len(message.content) > 800 else ""))
+
     embed = discord.Embed(
-        title="Incitement review needed",
-        description=f"**Author:** {message.author.mention}\n**Channel:** {message.channel.mention}\n"
-                    f"**Score:** {score:.2f}\n**Jump:** [link]({message.jump_url})",
+        title="⚠️ Incitement review needed",
+        description=f"**Channel:** {message.channel.mention}\n"
+                    f"**Score:** {score:.2f}\n"
+                    f"**Jump:** [link]({message.jump_url})",
         color=0xE67E22
     )
-    embed.add_field(name="Message", value=content_preview or "*<no text>*", inline=False)
-    embed.add_field(name="Details", value=f"Categories: {details.get('categories', {})}", inline=False)
-    if ch:
+
+    # Explicitly show author info
+    embed.add_field(
+        name="Author",
+        value=(f"{message.author.mention}\n"
+               f"Username: {message.author} (ID: {message.author.id})"),
+        inline=False
+    )
+    embed.add_field(
+        name="Message",
+        value=content_preview or "*<no text>*",
+        inline=False
+    )
+    embed.add_field(
+        name="Details",
+        value=f"Categories: {details.get('categories', {})}",
+        inline=False
+    )
+
+    try:
+        if ch is None:
+            raise PermissionError("Mod queue channel not found")
+        perms = ch.permissions_for(guild.me)
+        if not (perms.view_channel and perms.send_messages):
+            raise PermissionError("Bot lacks view/send in mod queue")
+
         await ch.send(embed=embed)
+    except Exception as e:
+        try:
+            perms_here = message.channel.permissions_for(guild.me)
+            if perms_here.send_messages:
+                await message.channel.send(
+                    f"🛡️ I couldn’t post to the mod queue ({e}). "
+                    f"Please check `MOD_QUEUE_CHANNEL_ID` and channel permissions."
+                )
+        except Exception:
+            pass
+        logging.warning(f"Escalation failed: {e}")
 
 @bot.event
 async def on_ready():
@@ -130,6 +187,7 @@ async def incitement(interaction: discord.Interaction, action: str, n: int = 5):
 
 @bot.event
 async def on_message(message: discord.Message):
+    logging.info(f"Seen: {message.content} from {message.author}")
     if message.author.bot:
         return
     # Skip DMs (optional): handle only guild messages
@@ -149,7 +207,7 @@ async def on_message(message: discord.Message):
     ctx = "\n".join(ctx_snips)
 
     # 3) Score
-    score, details = score_message(ar, ctx)
+    score, details = score_message(ar, ctx, text_raw_norm=norm)
 
     action_taken = None
     reason = "suspected incitement to violence"
